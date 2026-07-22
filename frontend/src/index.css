@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  h1, h2, h3, h4 {
+    font-family: "Sora", sans-serif;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 font-semibold text-sm transition;
+  }
+  .btn-primary {
+    @apply bg-ink text-white hover:bg-plum;
+  }
+  .btn-accent {
+    @apply bg-coral text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply border border-line text-ink hover:border-ink;
+  }
+  .card {
+    @apply bg-white border border-line rounded-xl;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-plum/30 focus:border-plum;
+  }
+  .label {
+    @apply block text-sm font-semibold text-ink mb-1;
+  }
+}

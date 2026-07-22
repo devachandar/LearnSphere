@@ -1,0 +1,207 @@
+version: "3.9"
+
+x-django-env: &django-env
+  DJANGO_DEBUG: "true"
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-only-jwt-secret-change-me}
+  JWT_ACCESS_TTL_MINUTES: "15"
+  JWT_REFRESH_TTL_DAYS: "7"
+  REDIS_URL: redis://redis:6379/0
+  RABBITMQ_URL: amqp://learnsphere:learnsphere@rabbitmq:5672/
+  AUTH_SERVICE_URL: http://auth-service:4001
+  LEARNING_SERVICE_URL: http://learning-service:4002
+  ASSESSMENT_SERVICE_URL: http://assessment-service:4003
+  COMMUNICATION_SERVICE_URL: http://communication-service:4004
+  MEDIA_SERVICE_URL: http://media-service:4005
+  ANALYTICS_SERVICE_URL: http://analytics-service:4006
+  ADMIN_SERVICE_URL: http://admin-service:4007
+
+services:
+  # ---------- Infrastructure ----------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: learnsphere
+      POSTGRES_PASSWORD: learnsphere
+      POSTGRES_MULTIPLE_DATABASES: auth_db,learning_db,assessment_db,communication_db,media_db,analytics_db,admin_db
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./infra/postgres-init:/docker-entrypoint-initdb.d
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnsphere"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: learnsphere
+      RABBITMQ_DEFAULT_PASS: learnsphere
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ---------- Auth Service ----------
+  auth-service:
+    build: ./services/auth-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/auth_db
+      PORT: "4001"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    ports: ["4001:4001"]
+    command: web
+
+  # ---------- Admin Service ----------
+  admin-service:
+    build: ./services/admin-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/admin_db
+      PORT: "4007"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    ports: ["4007:4007"]
+    command: web
+
+  admin-service-listener:
+    build: ./services/admin-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/admin_db
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    command: listener
+
+  # ---------- Learning Service ----------
+  learning-service:
+    build: ./services/learning-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/learning_db
+      PORT: "4002"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy }, redis: { condition: service_healthy } }
+    ports: ["4002:4002"]
+    command: web
+
+  learning-service-listener:
+    build: ./services/learning-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/learning_db
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy }, redis: { condition: service_healthy } }
+    command: listener
+
+  # ---------- Assessment Service ----------
+  assessment-service:
+    build: ./services/assessment-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/assessment_db
+      PORT: "4003"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    ports: ["4003:4003"]
+    command: web
+
+  # ---------- Communication Service ----------
+  communication-service:
+    build: ./services/communication-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/communication_db
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      NOTIFICATIONS_FROM: ${NOTIFICATIONS_FROM:-notifications@learnsphere.dev}
+      PORT: "4004"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    ports: ["4004:4004"]
+    command: web
+
+  communication-service-listener:
+    build: ./services/communication-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/communication_db
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      NOTIFICATIONS_FROM: ${NOTIFICATIONS_FROM:-notifications@learnsphere.dev}
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    command: listener
+
+  # ---------- Media Service ----------
+  media-service:
+    build: ./services/media-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/media_db
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      S3_BUCKET: ${S3_BUCKET:-}
+      PORT: "4005"
+    volumes: ["media_data:/app/uploads"]
+    depends_on: { postgres: { condition: service_healthy } }
+    ports: ["4005:4005"]
+    command: web
+
+  # ---------- Analytics Service ----------
+  analytics-service:
+    build: ./services/analytics-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/analytics_db
+      PORT: "4006"
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    ports: ["4006:4006"]
+    command: web
+
+  analytics-service-listener:
+    build: ./services/analytics-service
+    environment:
+      <<: *django-env
+      DATABASE_URL: postgres://learnsphere:learnsphere@postgres:5432/analytics_db
+    depends_on: { postgres: { condition: service_healthy }, rabbitmq: { condition: service_healthy } }
+    command: listener
+
+  # ---------- Gateway ----------
+  gateway:
+    build: ./infra/nginx
+    depends_on:
+      - auth-service
+      - admin-service
+      - learning-service
+      - assessment-service
+      - communication-service
+      - media-service
+      - analytics-service
+    ports: ["8080:80"]
+
+  # ---------- Frontend ----------
+  frontend:
+    build: ./frontend
+    environment:
+      - VITE_API_URL=http://localhost:8080/api
+    depends_on: [gateway]
+    ports: ["3000:80"]
+
+volumes:
+  pg_data:
+  media_data:
