@@ -8,7 +8,8 @@ organization's data stays completely invisible to every other
 organization - all on one shared platform.
 
 Backend: **Django REST Framework, PostgreSQL (one database per service),
-Redis, RabbitMQ.** Frontend: **React + TypeScript, Vite, TanStack Query,
+Redis, RabbitMQ.** 
+Frontend: **React + TypeScript, Vite, TanStack Query,
 Zustand, Tailwind CSS.**
 
 ## Architecture
