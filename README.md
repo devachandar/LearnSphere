@@ -1,6 +1,7 @@
 # LearnSphere
 
-A multi-tenant Learning Management System: organizations onboard instructors and learners under
+A multi-tenant Learning Management System, built as a system-design
+portfolio project: organizations onboard instructors and learners under
 one invite-coded workspace, instructors build courses with quizzes and
 assignments, learners enroll and earn certificates, and every
 organization's data stays completely invisible to every other
@@ -8,8 +9,7 @@ organization - all on one shared platform.
 
 Backend: **Django REST Framework, PostgreSQL (one database per service),
 Redis, RabbitMQ.** Frontend: **React + TypeScript, Vite, TanStack Query,
-Zustand, Tailwind CSS** - unchanged from the very first version of this
-project (see "Rebuilt on Django" below for why that's worth mentioning).
+Zustand, Tailwind CSS.**
 
 ## Architecture
 
@@ -88,42 +88,37 @@ The same fan-out pattern handles `AssessmentCompleted` and
 `OrganizationCreated` · `CoursePublished` · `EnrollmentCreated` ·
 `AssessmentCompleted` · `CertificateIssued`.
 
-## Rebuilt on Django
+The event bus is a genuine RabbitMQ topic exchange with **durable
+per-service queues** - not a simplified pub/sub shortcut. Every service
+that binds a queue to `domain_events` gets its own durable copy of a
+matching event, so Communication Service and Analytics Service each
+process the same `EnrollmentCreated` event independently, and an event
+published while a service is mid-deploy is still waiting for it on
+restart instead of being dropped.
 
-This started as a Node/TypeScript/Express backend and was rewritten
-service-by-service on Django REST Framework, with the **API contract held
-byte-for-byte identical** - same URL paths, same request/response JSON
-shapes, same JWT claim names (`userId`/`email`/`role`/`organizationId`/
-`fullName`). The React frontend needed zero changes as a result.
-
-The event bus is still **RabbitMQ as a genuine topic exchange with
-durable per-service queues** - not simplified down to something easier
-like Redis pub/sub. The Python client is `pika` instead of `amqplib`, but
-the pattern is identical: every service that binds a queue to
-`domain_events` gets its own durable copy of a matching event, so
-Communication Service and Analytics Service each process the same
-`EnrollmentCreated` event independently, and an event published while a
-service is mid-deploy is still waiting for it on restart instead of
-being dropped.
-
-One thing genuinely changed in the rewrite: Node ran each service's web
-server and its event consumer in the same process (Node handles both
-concurrently with no extra effort). Django's WSGI server and a
-long-running `pika` consume loop don't share a process as naturally, so
-each service that consumes events (`admin`, `learning`, `communication`,
-`analytics`) now runs as **two containers** - a `web` process and a
-`listener` process - instead of one. More containers, but each one does
-one thing, which is arguably more in the spirit of microservices anyway.
+Each service that consumes events (`admin`, `learning`, `communication`,
+`analytics`) runs as **two containers** - a `web` process (Django/Gunicorn,
+handles HTTP) and a `listener` process (a long-running `pika` consume
+loop, handles events). Keeping them separate means either one can restart
+independently without taking down the other.
 
 ## Multi-tenancy
 
 `organizationId` lives in the JWT claims (set once at signup, verified
-locally by every service the same way as the user's `role`). Nearly every
-query downstream is scoped to it via a shared `IsTenantScoped` permission
-class - a learner at one organization can never see another
-organization's courses, quizzes, or members. Platform admins are the one
-exception and can cross tenant boundaries, which is how the platform
-analytics dashboard aggregates every organization's KPIs at once.
+locally by every service the same way as the user's `role`), and a
+shared `IsTenantScoped` permission class enforces it on org-membership,
+course listing, and course search. Platform admins are the one exception
+and can cross tenant boundaries, which is how the platform analytics
+dashboard aggregates every organization's KPIs at once.
+
+Enforcement is not yet consistent everywhere: course detail
+(`GET /courses/:id`) is intentionally public with no auth, and neither
+enrollment nor a few other course-scoped reads (instructor's enrollment
+list, discussion/announcement reads) currently check that the requested
+`course_id` belongs to the requester's organization - only that the
+requester is authenticated with the right role. In practice this means
+a course ID from another organization, if known, isn't fully walled off
+yet. Worth tightening before treating tenant isolation as complete.
 
 ## Search stays inside Learning Service
 
@@ -164,10 +159,8 @@ Then open:
 ### Try the flow end to end
 
 1. **Register** at `/register` choosing "I'm starting a new organization"
-   - this creates both your account and the organization in one step
-     (verified live: registering as `org_admin` actually calls Admin
-     Service and gets back a real invite code, not a stub), visible on
-     the `/organization` page.
+   - this creates both your account and the organization in one step and
+     hands you back an invite code, visible on the `/organization` page.
 2. Open an incognito window, **register again** as "I'm an instructor
    joining one" using that invite code.
 3. As the instructor, go to **Instructor → New course**, add a module and
@@ -210,22 +203,6 @@ Services that consume events (`admin`, `learning`, `communication`,
 alongside the web server, matching the extra container each gets in
 `docker-compose.yml`.
 
-## What's simplified vs. the original design
-
-Sized for a portfolio, not 10M learners - a few deliberate cuts:
-
-- **Chat** (Step 3's "Course discussion, Chat") is implemented as an
-  async discussion forum, not a WebSocket-based live chat.
-- **Coding assessments** ("future" in the design doc) aren't built -
-  quizzes support multiple-choice/true-false with auto-grading, and
-  assignments support free-text/file-URL submissions with manual grading.
-- **Time spent** tracking (a reporting requirement) isn't instrumented -
-  completion rate and quiz score are, since those come naturally from
-  data already being written.
-- **Infra** (CloudFront, Load Balancer, GitHub Actions) is out of scope
-  for local dev - the Dockerfiles are meant to make wiring up the real
-  AWS deployment in the design doc a config change, not a rewrite.
-
 ## Repo layout
 
 ```
@@ -234,7 +211,7 @@ learnsphere/
 ├── .env.example
 ├── infra/
 │   ├── nginx/                  # API Gateway config
-│   └── postgres-init/          # creates one DB per service on first boot
+│   └── postgres-init/          # creates one DB per service, once, when the data volume is first created
 ├── services/
 │   ├── auth-service/
 │   ├── learning-service/
